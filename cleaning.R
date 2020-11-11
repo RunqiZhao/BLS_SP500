@@ -69,8 +69,8 @@ after <- dt %>% filter(BA == "After")
 # dt2 <- before %>% group_by(group) %>% mean(pct)
 dt2 <- ddply(before,.(group),function(sub){data.frame(pct.mean = mean(sub$pct))})
 bb <- dt2$pct.mean
-hist(bb)
+hist(bb, breaks= 50)
 
 dt3 <- ddply(after,.(group),function(sub){data.frame(pct.mean = mean(sub$pct))})
 aa <- dt3$pct.mean
-hist(aa)
+hist(aa,breaks = 50)

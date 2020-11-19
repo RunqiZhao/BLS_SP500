@@ -1,0 +1,190 @@
+---
+title: "S&P 500_BLS"
+author: "JP"
+date: "11/18/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+warning = F
+message = F
+pacman::p_load(
+  stringr,
+  plyr,
+  reshape2,
+  tidyverse,
+  dplyr,
+  lubridate,
+  tidyr,
+  forecast,
+  rvest,
+  tidyquant,
+  janitor,
+  quantmod
+)
+```
+
+```{r}
+# functions
+data_group <- function(data,days){
+  i0 <- days
+  for (i in i0 :dim(data)[1]){
+  if(data$pub[i] == 1){
+    data$BA[(i-i0):(i-1)] <- "Before"
+    data$BA[i:(i+i0-1)] <- "After"
+    data$group[(i-i0):(i+i0-1)] <- data$Date[i]
+  }
+  }
+    return(data)
+}
+
+```
+
+## Data clean & EDA
+
+# Read data
+
+```{r}
+#Dataframe setup
+today <- Sys.Date()
+sp500 <- new.env()
+invisible(
+getSymbols("^GSPC",env = sp500, src = "yahoo",
+           from = as.Date("1990-01-01"), to = as.Date(today))
+)
+GSPC <- sp500$GSPC
+
+GSPC <- tibble(date=index(GSPC),coredata(GSPC$GSPC.Close))
+
+names(GSPC)[names(GSPC) == "coredata(GSPC$GSPC.Close)"] <- "Close"
+names(GSPC)[names(GSPC) == "date"] <- "Date"
+
+# percentage
+GSPC$pct <- NA
+for (i in 2:dim(GSPC)[1]){
+  GSPC$pct[i] <- ((GSPC$Close[i] - GSPC$Close[(i-1)])/GSPC$Close[(i-1)])*100
+}
+```
+
+# Tag publication date
+```{r}
+GSPC$Date <- ymd(GSPC$Date)
+
+# tag weekdays
+GSPC$wday <- wday(GSPC$Date)
+
+# years and month
+GSPC$year <- year(GSPC$Date)
+GSPC$month <- month(GSPC$Date)
+GSPC$ym <- str_c(GSPC$year,GSPC$month,sep= "-")
+
+# publication date
+Nub <- 0
+GSPC$pub <- 0
+
+for (i in 2:dim(GSPC)[1]){
+  ym <- GSPC$ym[(i-1)]
+  if(GSPC$ym[i] == ym){
+    if(GSPC$wday[i] == 6){
+      Nub <- Nub+1
+      GSPC$pub[i] <- Nub
+    }
+  }
+  else{
+    ym <- GSPC$ym[i]
+    Nub <- 0
+    if(GSPC$ym[i] == ym){
+      if(GSPC$wday[i] == 6){
+        Nub <- Nub+1
+        GSPC$pub[i] <- Nub
+      }
+    }
+  }
+}
+
+for (i in 1:dim(GSPC)[1]){
+  if(GSPC$pub[i] != 1){
+    GSPC$pub[i] <-0
+  }
+}
+
+```
+
+# Select a smaller data frame
+```{r}
+GSPC <- GSPC %>% select("Date","Close","ym","pub","pct")
+```
+
+# 5 days before & after
+```{r}
+GSPC$BA <- NA
+GSPC$group <- NA
+
+GSPC <- data_group(GSPC,5)
+# GSPC <- data_group(GSPC,3)
+```
+
+# Delete NA
+```{r}
+dt <- na.omit(GSPC)
+```
+
+# Compare before and after
+```{r}
+before <- dt %>% filter(BA == "Before")
+after <- dt %>% filter(BA == "After")
+```
+
+# Histgrams
+```{r}
+# dt2 <- before %>% group_by(group) %>% mean(pct)
+dt2 <- ddply(before,.(group),function(sub){data.frame(pct.mean = mean(sub$pct))})
+bb <- dt2$pct.mean
+hist(bb, breaks= 50)
+
+
+dt3 <- ddply(after,.(group),function(sub){data.frame(pct.mean = mean(sub$pct))})
+aa <- dt3$pct.mean
+hist(aa,breaks = 50)
+
+ggplot() + geom_density(data = dt2, aes(x = pct.mean), colour = "cadetblue3") + geom_density(data = dt3, aes(x = pct.mean), colour = "red")
+```
+# Dataframe
+```{r}
+before <- before %>% group_by(group) %>% summarise(mean_pct = mean(pct))
+after <- after %>% group_by(group) %>% summarise(mean_pct = mean(pct))
+
+names(before)[names(before) == "mean_pct"] <- "Before"
+names(after)[names(after) == "mean_pct"] <- "After"
+
+Diff <- left_join(before, after, by = "group")
+
+```
+
+# Normal test and t test
+```{r}
+qqnorm(bb,col="cadetblue3",main = "Before");qqline(bb,col="red")
+
+qqnorm(aa,col="cadetblue3",main = "after");qqline(aa,col="red")
+
+fortest <- melt(Diff, id = "group" )
+names(fortest)[names(fortest) == "variable"] <- "BA"
+names(fortest)[names(fortest) == "value"] <- "pct"
+fortest$BA <- as.factor(fortest$BA)
+
+# t_test for before and after group
+# qqPlot(lm(log(High)~Student, data = email), simulate = TRUE, main = 'QQ Plot', labels = FALSE)
+t_test <- t.test(pct~BA, fortest, paired = FALSE, alternative = 'two.sided')
+t_test
+
+```
+
+
+# Percentages difference
+```{r}
+Diff$Difference <- Diff$After - Diff$Before
+hist(Diff$Difference,breaks = 50)
+ggplot(Diff, aes(x = Difference)) + geom_density(colour = "cadetblue3")
+qqnorm(Diff$Difference,col="cadetblue3",main = "Before");qqline(bb,col="red")
+```

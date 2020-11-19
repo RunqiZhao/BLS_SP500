@@ -51,7 +51,7 @@ today <- Sys.Date()
 sp500 <- new.env()
 invisible(
 getSymbols("^GSPC",env = sp500, src = "yahoo",
-           from = as.Date("1990-01-01"), to = as.Date(today))
+           from = as.Date("1990-01-01"), to = as.Date(today),"getSymbols.warning4.0"=FALSE)
 )
 GSPC <- sp500$GSPC
 
@@ -116,7 +116,7 @@ for (i in 1:dim(GSPC)[1]){
 GSPC <- GSPC %>% select("Date","Close","ym","pub","pct")
 ```
 
-# 5 days before & after
+# 3 or 5 days before & after
 ```{r}
 GSPC$BA <- NA
 GSPC$group <- NA

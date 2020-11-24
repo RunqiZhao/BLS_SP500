@@ -14,14 +14,15 @@ pacman::p_load(
   plyr,
   reshape2,
   tidyverse,
-  dplyr,
   lubridate,
   tidyr,
   forecast,
   rvest,
   tidyquant,
   janitor,
-  quantmod
+  quantmod,
+  fitdistrplus,
+  dplyr
 )
 ```
 
@@ -39,7 +40,6 @@ data_group <- function(data,before, after){
   }
     return(data)
 }
-
 ```
 
 ## Data clean & EDA
@@ -50,29 +50,42 @@ data_group <- function(data,before, after){
 #Dataframe setup
 today <- Sys.Date()
 sp500 <- new.env()
+vix <- new.env()
+
 invisible(
 getSymbols("^GSPC",env = sp500, src = "yahoo",
            from = as.Date("1990-01-01"), to = as.Date(today),"getSymbols.warning4.0"=FALSE)
 )
-GSPC <- sp500$GSPC
 
+invisible(
+getSymbols("^VIX",env = vix, src = "yahoo",
+           from = as.Date("1990-01-01"), to = as.Date(today)))
+
+GSPC <- sp500$GSPC
 GSPC <- tibble(date=index(GSPC),coredata(GSPC$GSPC.Close))
+
 names(GSPC)[names(GSPC) == "coredata(GSPC$GSPC.Close)"] <- "Close"
 names(GSPC)[names(GSPC) == "date"] <- "Date"
 
+VIX <- vix$VIX
+VIX <- tibble(date=as.Date(index(VIX)),coredata(VIX$VIX.Close))
 
-# VIX <- vix$VIX
-# VIX <- tibble(date=as.Date(index(VIX)),coredata(VIX$VIX.Close))
-# names(VIX)[names(VIX) == "coredata(VIX$VIX.Close)"] <- "Close"
+names(VIX)[names(VIX) == "coredata(VIX$VIX.Close)"] <- "Close"
+names(VIX)[names(VIX) == "date"] <- "Date"
 
-
+VIX$VixStatus <- 
+  ifelse(VIX$Close >= 30, "ext",
+         ifelse(VIX$Close >= 20, "high",
+                ifelse(VIX$Close >= 12, "med", "low")))
 # percentage
 GSPC$pct <- NA
 for (i in 2:dim(GSPC)[1]){
   GSPC$pct[i] <- ((GSPC$Close[i] - GSPC$Close[(i-1)])/GSPC$Close[(i-1)])*100
 }
-
 GSPC <- as.data.frame(GSPC)
+
+VIX <- VIX %>% as.data.frame() %>% dplyr::select("Date","VixStatus") 
+GSPC <- left_join(GSPC, VIX, by = "Date", copy = F)
 ```
 
 # Tag publication date
@@ -90,7 +103,6 @@ GSPC$ym <- str_c(GSPC$year,GSPC$month,sep= "-")
 # publication date
 Nub <- 0
 GSPC$pub <- 0
-
 for (i in 2:dim(GSPC)[1]){
   ym <- GSPC$ym[(i-1)]
   if(GSPC$ym[i] == ym){
@@ -116,19 +128,17 @@ for (i in 1:dim(GSPC)[1]){
     GSPC$pub[i] <-0
   }
 }
-
 ```
 
 # Select a smaller data frame
 ```{r}
-GSPC <- GSPC %>% select("Date","Close","ym","pub","pct")
+GSPC <- GSPC %>% dplyr::select("Date","Close","ym","pub","pct","VixStatus")
 ```
 
 # 5 days before & 1 day after
 ```{r}
 GSPC$BA <- NA
 GSPC$group <- NA
-
 GSPC <- data_group(GSPC,5,1)
 # GSPC <- data_group(GSPC,3,1)
 ```
@@ -136,6 +146,15 @@ GSPC <- data_group(GSPC,5,1)
 # Delete NA
 ```{r}
 dt <- na.omit(GSPC)
+```
+
+# VixStatus
+```{r}
+# For VixStatus of low, med, high, ext
+dt <- filter(dt, VixStatus == "low")
+# dt <- filter(dt, VixStatus == "med")
+# dt <- filter(dt, VixStatus == "high")
+# dt <- filter(dt, VixStatus == "ext")
 ```
 
 # Compare before and after
@@ -150,13 +169,69 @@ after <- dt %>% filter(BA == "After")
 # dt2 <- ddply(before,.(group),function(sub){data.frame(pct.mean = mean(sub$pct))})
 # bb <- dt2$pct.mean
 hist(before$pct, breaks= 50)
-
-
 # dt3 <- ddply(after,.(group),function(sub){data.frame(pct.mean = mean(sub$pct))})
 # aa <- dt3$pct.mean
 hist(after$pct,breaks = 50)
-
 ggplot() + geom_density(data = dt, aes(x = pct, colour = BA))
+```
+
+# Fit disttrition
+```{r}
+distBe <- fitdist(before$pct, "norm", method = "mle")
+summary(distBe)
+plot(distBe)
+
+
+distAf <- fitdist(after$pct, "norm", method = "mle")
+summary(distAf)
+plot(distAf)
+```
+
+# Normal test and t test (not use)
+```{r eval=FALSE, include=FALSE}
+# qqnorm(bb,col="cadetblue3",main = "Before");qqline(bb,col="red")
+# 
+# qqnorm(aa,col="cadetblue3",main = "after");qqline(aa,col="red")
+# 
+# fortest <- melt(Diff, id = "group" )
+# names(fortest)[names(fortest) == "variable"] <- "BA"
+# names(fortest)[names(fortest) == "value"] <- "pct"
+# fortest$BA <- as.factor(fortest$BA)
+# 
+# # t_test for before and after group
+# # qqPlot(lm(log(High)~Student, data = email), simulate = TRUE, main = 'QQ Plot', labels = FALSE)
+# t_test <- t.test(pct~BA, fortest, paired = FALSE, alternative = 'two.sided')
+# t_test
+```
+
+# use chi-square test and K-S test
+```{r}
+# summary(after$pct>0)
+# summary(before$pct>0)
+test <- matrix(c(sum(before$pct>0),sum(after$pct>0),sum(before$pct<=0),sum(after$pct<=0)),ncol = 2, nrow = 2)
+
+chisq.test(test)
+
+ks.test(after$pct, before$pct)
+```
+
+# Dataframe (not use)
+```{r eval=FALSE, include=FALSE}
+# before <- before %>% group_by(group) %>% summarise(mean_pct = mean(pct))
+# after <- after %>% group_by(group) %>% summarise(mean_pct = mean(pct))
+# 
+# names(before)[names(before) == "mean_pct"] <- "Before"
+# names(after)[names(after) == "mean_pct"] <- "After"
+# 
+# Diff <- left_join(before, after, by = "group")
+```
+
+# Percentages difference (not use)
+```{r eval=FALSE, include=FALSE}
+# Diff$Difference <- Diff$After - Diff$Before
+# hist(Diff$Difference,breaks = 50)
+# ggplot(Diff, aes(x = Difference)) + geom_density(colour = "cadetblue3")
+# qqnorm(Diff$Difference,col="cadetblue3",main = "Before");qqline(bb,col="red")
 ```
 # Dataframe (not use)
 ```{r eval=FALSE, include=FALSE}

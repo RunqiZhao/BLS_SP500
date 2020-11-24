@@ -182,7 +182,6 @@ distBe <- fitdist(before$pct, "norm", method = "mle")
 summary(distBe)
 plot(distBe)
 
-
 distAf <- fitdist(after$pct, "norm", method = "mle")
 summary(distAf)
 plot(distAf)

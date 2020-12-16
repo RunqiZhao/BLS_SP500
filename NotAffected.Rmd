@@ -1,0 +1,219 @@
+---
+title: "FDLSX"
+author: "Ricky"
+date: "12/4/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+warning = F
+message = F
+pacman::p_load(
+  stringr,
+  plyr,
+  reshape2,
+  tidyverse,
+  lubridate,
+  tidyr,
+  forecast,
+  rvest,
+  tidyquant,
+  janitor,
+  quantmod,
+  fitdistrplus,
+  stats,
+  dplyr
+)
+```
+
+```{r}
+# functions
+# 1
+data_group <- function(data,before, after){
+  data$BA <- NA
+  data$group <- NA
+  ib <- before
+  ia <- after
+  for (i in ib :dim(data)[1]){
+  if(data$pub[i] == 1){
+    data$BA[(i-ib):(i-1)] <- "Before"
+    data$BA[i:(i+ia-1)] <- "After"
+    data$group[(i-ib):(i+ia-1)] <- data$Date[i]
+  }
+  }
+    return(data)
+}
+
+# 2
+tag_data <- function(GSPC){
+  GSPC$Date <- ymd(GSPC$Date)
+
+  # tag weekdays
+  GSPC$wday <- wday(GSPC$Date)
+
+  # years and month
+  GSPC$year <- year(GSPC$Date)
+  GSPC$month <- month(GSPC$Date)
+  GSPC$ym <- str_c(GSPC$year,GSPC$month,sep= "-")
+
+  # publication date
+  Nub <- 0
+  GSPC$pub <- 0
+  for (i in 2:dim(GSPC)[1]){
+    ym <- GSPC$ym[(i-1)]
+    if(GSPC$ym[i] == ym){
+      if(GSPC$wday[i] == 6){
+        Nub <- Nub+1
+        GSPC$pub[i] <- Nub
+      }
+    }
+    else{
+      ym <- GSPC$ym[i]
+      Nub <- 0
+      if(GSPC$ym[i] == ym){
+        if(GSPC$wday[i] == 6){
+          Nub <- Nub+1
+          GSPC$pub[i] <- Nub
+        }
+      }
+    }
+  }
+
+  for (i in 1:dim(GSPC)[1]){
+    if(GSPC$pub[i] != 1){
+      GSPC$pub[i] <-0
+    }
+  }
+    return(GSPC)  
+}
+
+# 3
+select_data <- function(GSPC){
+  GSPC <- GSPC %>% dplyr::select("Date","Close","ym","pub","pct","VixStatus")
+  return(GSPC)
+}
+```
+
+## Data clean & EDA
+
+# Read data
+
+```{r}
+#Dataframe setup
+today <- Sys.Date()
+vix <- new.env()
+afffund <- new.env()
+
+invisible(
+getSymbols("^VIX",env = vix, src = "yahoo",
+           from = as.Date("1990-01-01"), to = as.Date(today)))
+
+VIX <- vix$VIX
+VIX <- tibble(date=as.Date(index(VIX)),coredata(VIX$VIX.Close))
+
+names(VIX)[names(VIX) == "coredata(VIX$VIX.Close)"] <- "Close"
+names(VIX)[names(VIX) == "date"] <- "Date"
+
+VIX$VixStatus <- 
+  ifelse(VIX$Close >= 30, 4,
+         ifelse(VIX$Close >= 20, 3,
+                ifelse(VIX$Close >= 12, 2, 1)))
+VIX$VixStatus <- ordered(VIX$VixStatus, labels = c('Low','Med','High', 'EXT High'))
+```
+
+
+```{r}
+invisible(
+getSymbols("FDLSX",env = afffund, src = "yahoo",
+           from = as.Date("1990-01-01"), to = as.Date(today),"getSymbols.warning4.0"=FALSE)
+)
+```
+
+
+```{r}
+#names
+FDLSX <- afffund$FDLSX
+FDLSX <- tibble(date=index(FDLSX),coredata(FDLSX$FDLSX.Close))
+
+names(FDLSX)[names(FDLSX) == "coredata(FDLSX$FDLSX.Close)"] <- "Close"
+names(FDLSX)[names(FDLSX) == "date"] <- "Date"
+
+###
+
+# percentage
+FDLSX$pct <- NA
+for (i in 2:dim(FDLSX)[1]){
+  FDLSX$pct[i] <- ((FDLSX$Close[i] - FDLSX$Close[(i-1)])/FDLSX$Close[(i-1)])*100
+}
+FDLSX <- as.data.frame(FDLSX)
+
+VIX <- VIX %>% as.data.frame() %>% dplyr::select("Date","VixStatus") 
+
+FDLSX <- left_join(FDLSX, VIX, by = "Date", copy = F)
+FDLSX <- tag_data(FDLSX)
+
+
+FDLSX <- select_data(FDLSX)
+
+FDLSX <- data_group(FDLSX,4,1)
+# GSPC <- data_group(GSPC,5,1)
+
+```
+
+```{r}
+dt <- na.omit(FDLSX)
+```
+
+
+# Compare before and after
+```{r}
+before <- dt %>% filter(BA == "Before")
+after <- dt %>% filter(BA == "After")
+BA <- c("Before","After")
+mean <- c(mean(before$pct), mean(after$pct))
+mean <- data.frame(BA, mean)
+```
+
+# use chi-square test and K-S test
+```{r}
+# summary(after$pct>0)
+# summary(before$pct>0)
+test <- matrix(c(sum(before$pct>0),sum(after$pct>0),sum(before$pct<=0),sum(after$pct<=0)),ncol = 2, nrow = 2)
+# kableExtra::kable(test)
+chisq.test(test)
+
+ks.test(after$pct, before$pct)
+# B <- ks.test(after$pct, before$pct)
+# B <- as.data.frame(unlist(B))
+# kableExtra::kable(B)
+```
+
+# VixStatus
+```{r}
+# For VixStatus of low, med, high, ext
+# dt <- filter(dt, VixStatus == "Low")
+# dt <- filter(dt, VixStatus == "Med")
+# dt <- filter(dt, VixStatus %in% c("Med","High","EXT High"))
+# dt <- filter(dt, VixStatus == "High")
+# dt <- filter(dt, VixStatus == "EXT High")
+```
+
+# Histgrams
+```{r}
+P_BA <- ggplot(data = dt, aes(x = pct)) + 
+  geom_density(alpha=.2, aes(fill=BA)) +
+  geom_vline(data = mean, aes(xintercept = mean, colour = BA), linetype = "dashed") +
+  labs(title = "Distribution Compare for FDLSX", x = "Percentage Change of Closed Pirce", y = "Density") 
+
+# + 
+#   facet_grid(~ VixStatus)
+P_BA
+
+P_VIX <- ggplot() + geom_density(data = dt, aes(x = pct, colour = BA)) +
+  labs(title = "Distribution under Different Vix Conditions", x = "Percentage Change of Closed Pirce", y = "Density") +
+  facet_grid(~ VixStatus) 
+  
+P_VIX
+```
